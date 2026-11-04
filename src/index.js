@@ -157,16 +157,13 @@ async function handleTries(request, env) {
   const maskedCard = maskCard(body.card);
   const redacted = body.redacted || maskedSentence !== body.sentence || maskedChecked !== body.checked;
 
-  const savedAt = new Date().toISOString().slice(0, 16) + "Z"; // cut to minute
-  // Actually cut seconds: YYYY-MM-DDTHH:MMZ
-  const d = new Date();
-  const savedAt2 = d.toISOString().slice(0, 16) + "Z";
+  const savedAt = new Date().toISOString().slice(0, 16) + "Z";
 
   const result = await env.DB.prepare(
     `INSERT INTO tries (saved_at, visitor, page_version, consent_v, mode, card, sentence, verdict, codes, checked, answer, beat_checker, note, redacted)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    savedAt2,
+    savedAt,
     body.visitor,
     body.page_version,
     body.consent_v,
