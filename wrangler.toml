@@ -1,0 +1,11 @@
+name = "ikigai-tries"
+main = "src/index.js"
+compatibility_date = "2026-11-04"
+
+[triggers]
+crons = ["0 2 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ikigai-tries"
+database_id = "00000000-0000-0000-0000-000000000000"

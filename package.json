@@ -1,0 +1,12 @@
+{
+  "name": "ikigai-tries",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Anonymous checker tries for Ikigai Loop",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  }
+}
