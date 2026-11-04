@@ -8,4 +8,4 @@ crons = ["0 2 * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "ikigai-tries"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "014d473e-48a7-40d9-8875-eba7a2e03f96"
