@@ -28,6 +28,9 @@ function maskText(value) {
   out = out.replace(/https?:\/\/\S+/gi, "[url]");
   out = out.replace(/www\.\S+/gi, "[url]");
   out = out.replace(/\d{9,}/g, "[digits]");
+  out = out.replace(/\+?[0-9\s.()\-]{7,}/g, (m) =>
+    ((m.match(/\d/g) || []).length >= 7 ? "[phone]" : m)
+  );
   return out;
 }
 
@@ -47,8 +50,16 @@ function maskCard(card) {
 
 function checkOrigin(request) {
   const origin = request.headers.get("Origin");
-  if (origin && origin !== ALLOWED_ORIGIN) return false;
+  if (origin !== ALLOWED_ORIGIN) return false;
   return true;
+}
+
+function tokensEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const ab = new TextEncoder().encode(a);
+  const bb = new TextEncoder().encode(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.subtle.timingSafeEqual(ab, bb);
 }
 
 function corsHeaders() {
@@ -117,7 +128,7 @@ function validateTry(body) {
   return null;
 }
 
-async function handleTries(request, env) {
+async function handleTries(request, env, ctx) {
   if (!checkOrigin(request)) return json({ error: "forbidden origin" }, 403);
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders() });
@@ -155,15 +166,16 @@ async function handleTries(request, env) {
   const maskedNote = body.note != null ? maskText(body.note) : null;
   const maskedAnswer = body.answer != null ? maskText(body.answer) : null;
   const maskedCard = maskCard(body.card);
-  const redacted = body.redacted || maskedSentence !== body.sentence || maskedChecked !== body.checked;
-
-  const savedAt = new Date().toISOString().slice(0, 16) + "Z";
+  const redacted = body.redacted || maskedSentence !== body.sentence || maskedChecked !== body.checked ||
+    (body.note != null && maskedNote !== body.note) ||
+    (body.answer != null && maskedAnswer !== body.answer) ||
+    JSON.stringify(maskedCard) !== JSON.stringify(body.card);
 
   const result = await env.DB.prepare(
     `INSERT INTO tries (saved_at, visitor, page_version, consent_v, mode, card, sentence, verdict, codes, checked, answer, beat_checker, note, redacted)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    savedAt,
+    now,
     body.visitor,
     body.page_version,
     body.consent_v,
@@ -185,21 +197,26 @@ async function handleTries(request, env) {
   const firstSeen = new Date().toISOString().slice(0, 10);
   if (body.delete_hash) {
     await env.DB.prepare(
-      "INSERT INTO visitors (code, delete_hash, first_seen) VALUES (?, ?, ?) ON CONFLICT(code) DO NOTHING"
+      "INSERT INTO visitors (code, delete_hash, first_seen) VALUES (?, ?, ?) ON CONFLICT(code) DO UPDATE SET delete_hash = COALESCE(visitors.delete_hash, excluded.delete_hash)"
     ).bind(body.visitor, body.delete_hash, firstSeen).run();
   } else {
     await env.DB.prepare(
-      "INSERT INTO visitors (code, delete_hash, first_seen) VALUES (?, ?, ?) ON CONFLICT(code) DO NOTHING"
+      "INSERT INTO visitors (code, delete_hash, first_seen) VALUES (?, ?, ?) ON CONFLICT(code) DO UPDATE SET delete_hash = COALESCE(visitors.delete_hash, excluded.delete_hash)"
     ).bind(body.visitor, null, firstSeen).run();
   }
 
   // push
   if (env.NTFY_TOPIC) {
     try {
-      await fetch("https://ntfy.sh/" + env.NTFY_TOPIC, {
+      const notice = fetch("https://ntfy.sh/" + env.NTFY_TOPIC, {
         method: "POST",
         body: "Ikigai checker: try " + id + " saved (" + body.mode + ", " + body.verdict + ")",
       });
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil(notice.catch(() => {}));
+      } else {
+        await notice;
+      }
     } catch (e) {}
   }
 
@@ -207,7 +224,10 @@ async function handleTries(request, env) {
 }
 
 async function handleDelete(request, env, code) {
-  if (!checkOrigin(request)) return json({ error: "forbidden origin" }, 403);
+  const adminToken = env.EXPORT_TOKEN;
+  const providedAdmin = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "") || request.headers.get("X-Admin-Token");
+  const isAdmin = tokensEqual(providedAdmin, adminToken);
+  if (!isAdmin && !checkOrigin(request)) return json({ error: "forbidden origin" }, 403);
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders() });
   }
@@ -218,9 +238,6 @@ async function handleDelete(request, env, code) {
   if (rb.text) {
     try { body = JSON.parse(rb.text); } catch { body = {}; }
   }
-  const adminToken = env.EXPORT_TOKEN;
-  const providedAdmin = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "") || request.headers.get("X-Admin-Token");
-  const isAdmin = adminToken && providedAdmin === adminToken;
 
   const key = body && body.key ? body.key : (request.headers.get("X-Delete-Key") || null);
 
@@ -244,7 +261,7 @@ async function handleDelete(request, env, code) {
 async function handleExport(request, env) {
   const token = env.EXPORT_TOKEN;
   const provided = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "") || request.headers.get("X-Admin-Token");
-  if (!token || provided !== token) return json({ error: "unauthorized" }, 401);
+  if (!token || !tokensEqual(provided, token)) return json({ error: "unauthorized" }, 401);
   const url = new URL(request.url);
   const after = parseInt(url.searchParams.get("after") || "0", 10) || 0;
   const rows = await env.DB.prepare(
@@ -277,7 +294,7 @@ export default {
 
     // POST /v1/tries
     if (path === "/v1/tries") {
-      return handleTries(request, env);
+      return handleTries(request, env, ctx);
     }
     // POST /v1/visitors/{code}/delete
     let m = path.match(/^\/v1\/visitors\/([^/]+)\/delete$/);
@@ -293,5 +310,8 @@ export default {
   async scheduled(event, env, ctx) {
     const cutoff = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     await env.DB.prepare("DELETE FROM tries WHERE saved_at < ?").bind(cutoff).run();
+    await env.DB.prepare(
+      "DELETE FROM visitors WHERE first_seen < ? AND NOT EXISTS (SELECT 1 FROM tries WHERE tries.visitor = visitors.code)"
+    ).bind(cutoff).run();
   },
 };
