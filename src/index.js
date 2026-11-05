@@ -149,7 +149,6 @@ async function handleTries(request, env, ctx) {
   if (vErr) return json({ error: vErr }, 400, corsHeaders());
 
   // rate limits
-  const now = new Date().toISOString();
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const perVisitor = await env.DB.prepare(
     "SELECT COUNT(*) AS c FROM tries WHERE visitor = ? AND saved_at >= ?"
@@ -175,7 +174,7 @@ async function handleTries(request, env, ctx) {
     `INSERT INTO tries (saved_at, visitor, page_version, consent_v, mode, card, sentence, verdict, codes, checked, answer, beat_checker, note, redacted)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    now,
+    new Date().toISOString().slice(0, 16) + "Z",
     body.visitor,
     body.page_version,
     body.consent_v,
