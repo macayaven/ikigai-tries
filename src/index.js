@@ -28,7 +28,7 @@ function maskText(value) {
   out = out.replace(/https?:\/\/\S+/gi, "[url]");
   out = out.replace(/www\.\S+/gi, "[url]");
   out = out.replace(/\d{9,}/g, "[digits]");
-  out = out.replace(/\+?[0-9\s.()\-]{7,}/g, (m) =>
+  out = out.replace(/\+?[\d(][\d\s.\-()]*\d/g, (m) =>
     ((m.match(/\d/g) || []).length >= 7 ? "[phone]" : m)
   );
   return out;
